@@ -46,7 +46,7 @@ DEATH_COOKIES_FILE = os.path.join(SAVES_FOLDER, "deathcookies.json")
 GAMEID_LIST_FILE = os.path.join(BASE_DIR, "daftar gameid.json")
 PLAY_GAME_FOLDER = os.path.join(BASE_DIR, "play game.id.json")
 
-console = Console()
+console = Console(force_terminal=True, force_interactive=True, width=220)
 
 # Default config
 DEFAULT_CONFIG = {
@@ -2268,207 +2268,191 @@ def main():
         proc_cycle(accounts, cfg, follow_state, workspace_folder)        
 
     time.sleep(1)
-    console.clear()
 
-    # Main loop - check setiap detik
-    with Live(console=console, screen=True, refresh_per_second=1) as live:
-        last_proc_cycle = time.time()
-        proc_cycle_interval = 5  # Check every 5 seconds
-        
-        while True:
-            now = time.time()
+    # Deteksi apakah berjalan dari EXE PyInstaller
+    is_frozen = getattr(sys, 'frozen', False)
 
-            # Run proc_cycle setiap interval
-            if now >= last_proc_cycle + proc_cycle_interval:
-                proc_cycle(accounts, cfg, follow_state, workspace_folder)
-                last_proc_cycle = now
+    # Force enable Windows ANSI/VT100 agar Rich bisa render warna di CMD
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            # Enable ENABLE_VIRTUAL_TERMINAL_PROCESSING (0x0004)
+            kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+        except Exception:
+            pass
 
-            follow_mode = "ENABLED" if cfg.get("FollowPlayer", False) else "DISABLED"
-            follow_target = cfg.get("FollowPlayerUsername", "N/A")
-            first_check_min = cfg.get("first_check", 3)
-            death = load_death_cookies()
-            total_cookies = len(accounts)
-            total_instance = sum(
-                1 for acc in accounts
-                if acc.get("pid") and is_roblox_process_running(acc.get("pid"))
-            )           
-            title_parts = [f"Roblox Multi-Instance v3"]
-            title_parts.append(f"First Check: {first_check_min}min | "f"Instance: {total_instance} | "f"Cookies: {total_cookies} | "f"Cookies Dead: {len(death)}")
-            if cfg.get("FollowPlayer", False):
-                title_parts.append(f"Following: {follow_target}")
-            
-            table = Table(
-                title="\n".join(title_parts),
-                show_header=True, 
-                header_style="bold magenta",
-                box=None
-            )
-            
+    def build_table():
+        """Build tabel Rich - dipanggil setiap refresh"""
+        first_check_min = cfg.get("first_check", 3)
+        death = load_death_cookies()
+        total_cookies = len(accounts)
+        total_instance = sum(
+            1 for acc in accounts
+            if acc.get("pid") and is_roblox_process_running(acc.get("pid"))
+        )
+
+        title_parts = ["Roblox Multi-Instance v3"]
+        title_parts.append(
+            f"First Check: {first_check_min}min | "
+            f"Instance: {total_instance} | "
+            f"Cookies: {total_cookies} | "
+            f"Cookies Dead: {len(death)}"
+        )
+        if cfg.get("FollowPlayer", False):
+            title_parts.append(f"Following: {cfg.get('FollowPlayerUsername', '')}")
+
+        tbl = Table(
+            title="\n".join(title_parts),
+            show_header=True,
+            header_style="bold magenta",
+            box=None,
+        )
+
+        if show_bf_stats:
+            tbl.add_column("No.", justify="right", width=3)
+            tbl.add_column("Username", min_width=8)
+            tbl.add_column("Level", width=5)
+            tbl.add_column("Game", min_width=12)
+            tbl.add_column("Server", width=8)
+            tbl.add_column("Beli", width=10)
+            tbl.add_column("Frag", width=6)
+            tbl.add_column("Status", min_width=20)
+            tbl.add_column("Race", width=8)
+            tbl.add_column("Meele", min_width=10)
+            tbl.add_column("DF", min_width=10)
+            tbl.add_column("Sword", min_width=10)
+            tbl.add_column("Gun", min_width=10)
+            tbl.add_column("Fruits", min_width=10)
+            num_cols = 14
+        else:
+            tbl.add_column("No.", justify="right", width=3)
+            tbl.add_column("Username", min_width=8)
+            tbl.add_column("Game", min_width=15)
+            tbl.add_column("Server", width=10)
+            tbl.add_column("Status", min_width=20)
+            num_cols = 5
+
+        for i, acc in enumerate(accounts, start=1):
+            name = acc["username"]
+            game_id = acc.get("game_id") or cfg.get("gameId")
+            game_name = get_game_name(game_id)
+            has_private = bool(acc.get("private_link") or cfg.get("private_link"))
+            server_info = "[Pvt]" if has_private else "[Pub]"
+
+            try:
+                status = determine_account_status(
+                    acc, workspace_folder, int(cfg.get("first_check", 3))
+                )
+            except Exception:
+                status = "offline"
+
+            time_diff = get_json_time_diff(workspace_folder, name)
+            launch_time = acc.get("launch_time")
+
+            # Status message - selalu ada default
+            if status == "in_game":
+                status_msg = f"In Game | JSON: {int(time_diff)}s" if time_diff is not None else "In Game"
+                status_style = "bold green"
+            elif status == "waiting":
+                if launch_time is not None:
+                    first_check_seconds = int(cfg.get("first_check", 3)) * 60
+                    remaining = max(0, first_check_seconds - int(time.time() - launch_time))
+                    status_msg = f"Waiting ({remaining}s)"
+                else:
+                    status_msg = "Waiting"
+                status_style = "bold yellow"
+            elif status == "needs_kill":
+                status_msg = "JSON Dead - Killing"
+                status_style = "bold red"
+            else:  # offline + default
+                status_msg = "Offline"
+                status_style = "bold red"
+
+            # BF Stats
+            bf = load_bf_stats(workspace_folder, name)
+            lvl = beli = frags = race = meele = sword = gun = fruit_list = df = "-"
+
+            if bf:
+                lvl = f"[bold green]{bf.get('level', '-')}[/]"
+                beli_raw = bf.get("beli")
+                if isinstance(beli_raw, int):
+                    beli = f"[cyan]{beli_raw:,}[/]"
+                fr_raw = bf.get("frags")
+                if isinstance(fr_raw, int):
+                    frags = f"[bright_blue]{fr_raw}[/]"
+                race = f"[magenta]{bf.get('race', '-')}[/]"
+                meele_raw = bf.get("meele", "-")
+                meele = f"[cyan]{meele_raw}[/]" if meele_raw not in ("", "-") else "-"
+                df_raw = bf.get("fruit_equipped", "")
+                df = f"[bold yellow]{df_raw}[/]" if df_raw not in ("", "-") else "-"
+
+                def color_rarity(items):
+                    colored = []
+                    for tier, iname in items:
+                        if tier == "Mythical":
+                            colored.append(f"[bold red]{iname}[/]")
+                        elif tier == "Legendary":
+                            colored.append(f"[bold yellow]{iname}[/]")
+                    return ", ".join(colored) if colored else "-"
+
+                sword = color_rarity(bf.get("swords", []))
+                gun = color_rarity(bf.get("guns", []))
+                fruit_list = color_rarity(bf.get("fruits", []))
+
+            username_text = Text(name, style=status_style)
+            game_text = Text(game_name, style="bold cyan")
+            server_text = Text(server_info, style="magenta")
+            status_text = Text(status_msg, style=status_style)
+
             if show_bf_stats:
-                table.add_column("No.", justify="right", width=3)
-                table.add_column("Username", min_width=8)
-                table.add_column("Level", width=5)
-                table.add_column("Game", min_width=12)
-                table.add_column("Server", width=8)
-                table.add_column("Beli", width=10)
-                table.add_column("Frag", width=6)
-                table.add_column("Status", min_width=20)
-                table.add_column("Race", width=8)
-                table.add_column("Meele", min_width=10)                
-                table.add_column("DF", min_width=10)
-                table.add_column("Sword", min_width=10)
-                table.add_column("Gun", min_width=10)
-                table.add_column("Fruits", min_width=10)
+                tbl.add_row(
+                    str(i), username_text, lvl, game_text, server_text,
+                    beli, frags, status_text, race, meele, df, sword, gun, fruit_list
+                )
             else:
-                table.add_column("No.", justify="right", width=3)
-                table.add_column("Username", min_width=8)
-                table.add_column("Game", min_width=15)
-                table.add_column("Server", width=10)
-                table.add_column("Status", min_width=20)
+                tbl.add_row(str(i), username_text, game_text, server_text, status_text)
 
-            for i, acc in enumerate(accounts, start=1):
-                name = acc["username"]
-                
-                game_id = acc.get("game_id") or cfg.get("gameId")
-                game_name = get_game_name(game_id)
-                
-                has_private = bool(acc.get("private_link") or cfg.get("private_link"))
-                server_info = "[Pvt]" if has_private else "[Pub]"
+        # Log rows - jumlah kolom dinamis
+        if LOG_MESSAGES:
+            empty_cells = tuple("" for _ in range(num_cols))
+            header_cells = ("", Text("=== Logs ===", style="bold cyan")) + tuple("" for _ in range(num_cols - 2))
+            tbl.add_row(*empty_cells)
+            tbl.add_row(*header_cells)
+            for log_msg in LOG_MESSAGES:
+                log_cells = ("", Text(log_msg, style="dim")) + tuple("" for _ in range(num_cols - 2))
+                tbl.add_row(*log_cells)
 
-                # Get status dengan fungsi baru
-                status = determine_account_status(acc, workspace_folder, int(cfg.get("first_check", 3)))
-                
-                # Format status display
-                time_diff = get_json_time_diff(workspace_folder, name)
-                launch_time = acc.get("launch_time")
-                
-                if status == "in_game":
-                    if time_diff is not None:
-                        status_msg = f"In Game | JSON: {int(time_diff)}s"
-                    else:
-                        status_msg = "In Game "
-                    status_style = "bold green"
-                    
-                elif status == "offline":
-                    status_msg = "Offline "
-                    status_style = "bold red"
-                    
-                elif status == "waiting":
-                    if launch_time is not None:
-                        first_check_seconds = int(cfg.get("first_check", 3)) * 60
-                        remaining = max(0, first_check_seconds - int(time.time() - launch_time))
-                        status_msg = f" Waiting ({remaining}s)"
-                    else:
-                        status_msg = " Waiting"
-                    status_style = "bold yellow"
-                    
-                elif status == "needs_kill":
-                    status_msg = " JSON Dead - Killing"
-                    status_style = "bold red"
-                
-                # BF Stats Safe Loader
-                bf = load_bf_stats(workspace_folder, acc["username"])
+        return tbl
 
-                lvl = "-"
-                beli = "-"
-                frags = "-"
-                race = "-"
-                meele = "-"
-                sword = "-"
-                gun = "-"
-                fruit_list = "-"
-                df = "-"
+    # Main loop dengan Live display
+    # screen=False agar kompatibel dengan CMD Windows & EXE PyInstaller
+    last_proc_cycle = time.time()
+    proc_cycle_interval = 5
 
-                if bf:
-                    # Level
-                    lvl = f"[bold green]{bf.get('level','-')}[/]"
+    with Live(
+        build_table(),
+        console=console,
+        screen=False,          # KUNCI: False agar tidak pakai alternate screen buffer
+        refresh_per_second=1,
+        auto_refresh=False,    # Manual refresh untuk kontrol penuh
+        transient=False,
+    ) as live:
+        while True:
+            try:
+                now = time.time()
 
-                    # Beli
-                    beli_raw = bf.get("beli")
-                    if isinstance(beli_raw, int):
-                        beli = f"[cyan]{beli_raw:,}[/]"
-                    else:
-                        beli = "-"
+                if now >= last_proc_cycle + proc_cycle_interval:
+                    proc_cycle(accounts, cfg, follow_state, workspace_folder)
+                    last_proc_cycle = now
 
-                    # Fragments
-                    fr_raw = bf.get("frags")
-                    if isinstance(fr_raw, int):
-                        frags = f"[bright_blue]{fr_raw}[/]"
-                    else:
-                        frags = "-"
+                tbl = build_table()
+                live.update(tbl, refresh=True)
 
-                    # Race + Melee
-                    race = f"[magenta]{bf.get('race','-')}[/]"
-                    meele_raw = bf.get("meele", "-")
-                    meele = f"[cyan]{meele_raw}[/]" if meele_raw not in ("", "-") else "-"
+            except Exception as e:
+                # Jangan biarkan error apapun membunuh loop display
+                add_log(f"Display error: {str(e)[:60]}", important=True)
 
-                    # DF (EquippedFruit)
-                    df_raw = bf.get("fruit_equipped", "")
-                    df = f"[bold yellow]{df_raw}[/]" if df_raw not in ("", "-") else "-"
-
-                    # Sword / Gun / Fruits (rarity color)
-                    def color_rarity(items):
-                        colored = []
-                        for (tier, name) in items:
-                            if tier == "Mythical":
-                                colored.append(f"[bold red]{name}[/]")
-                            elif tier == "Legendary":
-                                colored.append(f"[bold yellow]{name}[/]")
-                        return ", ".join(colored) if colored else "-"
-
-                    sword = color_rarity(bf.get("swords", []))
-                    gun = color_rarity(bf.get("guns", []))
-                    fruit_list = color_rarity(bf.get("fruits", []))
-
-                username_text = Text(name, style=status_style)
-                game_text = Text(game_name, style="bold cyan")
-                server_text = Text(server_info, style="magenta")
-                status_text = Text(status_msg, style=status_style)
-
-                if show_bf_stats:
-                    table.add_row(
-                        str(i),
-                        username_text,
-                        lvl,
-                        game_text,
-                        server_text,
-                        beli,
-                        frags,
-                        status_text,
-                        race,
-                        meele,
-                        df,
-                        sword,
-                        gun,
-                        fruit_list
-                    )
-                else:
-                    table.add_row(
-                        str(i),
-                        username_text,
-                        game_text,
-                        server_text,
-                        status_text
-                    )
-
-            if LOG_MESSAGES:
-                if show_bf_stats:
-                    empty_row = ("", "", "", "", "", "", "", "", "", "", "", "", "", "")
-                    log_header = ("", Text("=== Logs ===", style="bold cyan"), "", "", "", "", "", "", "", "", "", "", "", "")
-                    def make_log_row(msg):
-                        return ("", Text(msg, style="dim"), "", "", "", "", "", "", "", "", "", "", "", "")
-                else:
-                    empty_row = ("", "", "", "", "")
-                    log_header = ("", Text("=== Logs ===", style="bold cyan"), "", "", "")
-                    def make_log_row(msg):
-                        return ("", Text(msg, style="dim"), "", "", "")
-                
-                table.add_row(*empty_row)
-                table.add_row(*log_header)
-                for log_msg in LOG_MESSAGES:
-                    table.add_row(*make_log_row(log_msg))
-
-            live.update(table)
             time.sleep(1)
 
 
