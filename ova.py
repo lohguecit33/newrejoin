@@ -23,6 +23,15 @@ BF_CACHE_TIME = {}
 BF_CACHE_INTERVAL = 10  # detik
 
 OVA_PROCESS = None
+
+# Base dir: compat dengan exec() wrapper, PyInstaller EXE, dan script langsung
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+elif '__file__' in vars():
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+
 # ----------------------------
 # Config / Files
 # ----------------------------
@@ -38,12 +47,6 @@ GAMEID_LIST_FILE = os.path.join(BASE_DIR, "daftar gameid.json")
 PLAY_GAME_FOLDER = os.path.join(BASE_DIR, "play game.id.json")
 
 console = Console()
-
-# Base dir: folder EXE (saat frozen) atau folder script
-if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(sys.executable)
-else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Default config
 DEFAULT_CONFIG = {
