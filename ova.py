@@ -5,6 +5,7 @@ import requests
 import subprocess
 import psutil
 import threading
+import sys
 from datetime import datetime, timezone
 from rich.table import Table
 from rich.console import Console
@@ -25,16 +26,24 @@ OVA_PROCESS = None
 # ----------------------------
 # Config / Files
 # ----------------------------
-CONFIG_FILE = "config.json"
-COOKIE_FILE = "cookies.txt"
-SERVER_FILE = "servers.txt"
-SAVES_FOLDER = "saves"                    
-SAVES_FILE = os.path.join(SAVES_FOLDER, "saves.json")  
+CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+COOKIE_FILE = os.path.join(BASE_DIR, "cookies.txt")
+SERVER_FILE = os.path.join(BASE_DIR, "servers.txt")
+SAVES_FOLDER = os.path.join(BASE_DIR, "saves")
+SAVES_FILE = os.path.join(SAVES_FOLDER, "saves.json")
 DEATH_FILE = os.path.join(SAVES_FOLDER, "death.json")
 MAX_DEATH_LAUNCH_ATTEMPT = 3
 DEATH_COOKIES_FILE = os.path.join(SAVES_FOLDER, "deathcookies.json")
+GAMEID_LIST_FILE = os.path.join(BASE_DIR, "daftar gameid.json")
+PLAY_GAME_FOLDER = os.path.join(BASE_DIR, "play game.id.json")
 
 console = Console()
+
+# Base dir: folder EXE (saat frozen) atau folder script
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Default config
 DEFAULT_CONFIG = {
@@ -84,10 +93,6 @@ ACCOUNT_CHANGE_STATE = {
     "is_changing": False,
     "change_start_time": 0
 }
-
-# Tambahkan di bagian variabel global
-GAMEID_LIST_FILE = "daftar gameid.json"
-PLAY_GAME_FOLDER = "play game.id.json"
 
 # Variabel untuk rotasi
 CURRENT_GAME_INDEX = {}
@@ -170,7 +175,11 @@ def resolve_executor_paths(cfg):
     return workspace, autoexec
 
 def sync_script_folder_to_autoexec(autoexec_folder):
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    # Compat: PyInstaller EXE vs script biasa
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
     script_folder = os.path.join(base_dir, "autoexec")
 
     if not os.path.isdir(script_folder):
@@ -2440,10 +2449,21 @@ def main():
                     )
 
             if LOG_MESSAGES:
-                table.add_row("", "", "", "", "")
-                table.add_row("", Text("=== Logs ===", style="bold cyan"), "", "", "")
+                if show_bf_stats:
+                    empty_row = ("", "", "", "", "", "", "", "", "", "", "", "", "", "")
+                    log_header = ("", Text("=== Logs ===", style="bold cyan"), "", "", "", "", "", "", "", "", "", "", "", "")
+                    def make_log_row(msg):
+                        return ("", Text(msg, style="dim"), "", "", "", "", "", "", "", "", "", "", "", "")
+                else:
+                    empty_row = ("", "", "", "", "")
+                    log_header = ("", Text("=== Logs ===", style="bold cyan"), "", "", "")
+                    def make_log_row(msg):
+                        return ("", Text(msg, style="dim"), "", "", "")
+                
+                table.add_row(*empty_row)
+                table.add_row(*log_header)
                 for log_msg in LOG_MESSAGES:
-                    table.add_row("", Text(log_msg, style="dim"), "", "", "")
+                    table.add_row(*make_log_row(log_msg))
 
             live.update(table)
             time.sleep(1)
